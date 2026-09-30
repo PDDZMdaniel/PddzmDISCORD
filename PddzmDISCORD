@@ -1,59 +1,25 @@
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local VirtualInputManager = game:GetService("VirtualInputManager")
-local Lighting = game:GetService("Lighting")
+local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
 
-repeat task.wait() until game:IsLoaded()
-task.wait(5)
+if not game:IsLoaded() then
+    game.Loaded:Wait()
+end
 
 local player = Players.LocalPlayer
 
-repeat task.wait() until player.Character
-repeat task.wait() until player:FindFirstChild("muscleEvent")
-repeat task.wait() until player:FindFirstChild("leaderstats")
-repeat task.wait() until player:FindFirstChild("petsFolder")
-
-local muscleEvent = player:WaitForChild("muscleEvent")
-local leaderstats = player:WaitForChild("leaderstats")
-local rebirthsStat = leaderstats:WaitForChild("Rebirths")
-local strengthStat = leaderstats:WaitForChild("Strength")
-local machineInUse = player:WaitForChild("machineInUse")
+local muscleEvent = player:WaitForChild("muscleEvent", 10) or player:FindFirstChild("muscleEvent")
+local leaderstats = player:WaitForChild("leaderstats", 10) or player:FindFirstChild("leaderstats")
+local strengthStat = leaderstats and leaderstats:WaitForChild("Strength", 10)
 local playerGui = player:WaitForChild("PlayerGui")
 
 ----------------------------------------------------------------
--- CONFIGURAÇÃO ULTRA RÁPIDA
+-- CONFIGURAÇÃO
 ----------------------------------------------------------------
 
--- Sem delay entre pets.
-local PET_DELAY = 0
-
--- Sem delay na troca de loadout.
-local PET_SWITCH_DELAY = 0
-
--- Sem delay proposital no rebirth.
-local REBIRTH_DELAY = 0
-
--- Farm de força na velocidade máxima.
-local REP_DELAY = 0
-
--- Quantidade de rep por ciclo.
-local REP_BATCH = 1
-
--- Verificação de tamanho.
-local SIZE_CHECK_DELAY = 1
-
--- Apenas alerta.
-local REBIRTH_TIMEOUT = 900
-
-----------------------------------------------------------------
--- ESTADO
-----------------------------------------------------------------
-
-local isRunning = false
-local initializing = false
-local lockEnabled = false
-local rebirthThread = nil
-local lastRebirthTick = tick()
+local isFarming = true
+local REPS_PER_FRAME = 50 -- Quantidade de disparos executados a cada fraçao de milissegundo
 
 ----------------------------------------------------------------
 -- ESCONDER SIDE BUTTONS
@@ -76,388 +42,32 @@ local function hideSideButtons()
 
     sideButtons.Visible = false
 
-    sideButtonsConnection =
-        sideButtons:GetPropertyChangedSignal("Visible"):Connect(function()
-            if sideButtons.Visible then
-                sideButtons.Visible = false
-            end
-        end)
+    sideButtonsConnection = sideButtons:GetPropertyChangedSignal("Visible"):Connect(function()
+        if sideButtons.Visible then
+            sideButtons.Visible = false
+        end
+    end)
 end
 
 playerGui.DescendantAdded:Connect(function(object)
     if object.Name == "sideButtons" then
-        task.defer(hideSideButtons)
+        hideSideButtons()
     end
 end)
 
 hideSideButtons()
 
 ----------------------------------------------------------------
--- ANTI-LAG
-----------------------------------------------------------------
-
-local preservedGuis = {
-    RebirthHUD = true,
-    gameGui = true,
-    statEffectsGui = true,
-}
-
-local function applyAntiLag()
-    for _, gui in ipairs(playerGui:GetChildren()) do
-        if gui:IsA("ScreenGui") and not preservedGuis[gui.Name] then
-            pcall(function()
-                gui:Destroy()
-            end)
-        end
-    end
-
-    for _, v in ipairs(Lighting:GetChildren()) do
-        if v:IsA("Sky") then
-            pcall(function()
-                v:Destroy()
-            end)
-        end
-    end
-
-    if not Lighting:FindFirstChild("DarkSky") then
-        local darkSky = Instance.new("Sky")
-        darkSky.Name = "DarkSky"
-
-        darkSky.SkyboxBk = "rbxassetid://0"
-        darkSky.SkyboxDn = "rbxassetid://0"
-        darkSky.SkyboxFt = "rbxassetid://0"
-        darkSky.SkyboxLf = "rbxassetid://0"
-        darkSky.SkyboxRt = "rbxassetid://0"
-        darkSky.SkyboxUp = "rbxassetid://0"
-
-        darkSky.Parent = Lighting
-    end
-
-    Lighting.Brightness = 0
-    Lighting.ClockTime = 0
-    Lighting.OutdoorAmbient = Color3.new(0, 0, 0)
-    Lighting.Ambient = Color3.new(0, 0, 0)
-    Lighting.FogColor = Color3.new(0, 0, 0)
-    Lighting.FogEnd = 100
-
-    for _, obj in ipairs(workspace:GetDescendants()) do
-        if obj:IsA("ParticleEmitter")
-            or obj:IsA("PointLight")
-            or obj:IsA("SpotLight")
-            or obj:IsA("SurfaceLight") then
-
-            pcall(function()
-                obj:Destroy()
-            end)
-        end
-    end
-end
-
-----------------------------------------------------------------
--- ANTI-LAG PERMANENTE
+-- MANTER SIZE (DISPARO INSTANTÂNEO)
 ----------------------------------------------------------------
 
 task.spawn(function()
-    while true do
-        task.wait(10)
-
-        pcall(function()
-            if not Lighting:FindFirstChild("DarkSky") then
-                local sky = Instance.new("Sky")
-                sky.Name = "DarkSky"
-
-                sky.SkyboxBk = "rbxassetid://0"
-                sky.SkyboxDn = "rbxassetid://0"
-                sky.SkyboxFt = "rbxassetid://0"
-                sky.SkyboxLf = "rbxassetid://0"
-                sky.SkyboxRt = "rbxassetid://0"
-                sky.SkyboxUp = "rbxassetid://0"
-
-                sky.Parent = Lighting
-            end
-
-            Lighting.Brightness = 0
-            Lighting.ClockTime = 0
-            Lighting.OutdoorAmbient = Color3.new(0, 0, 0)
-            Lighting.Ambient = Color3.new(0, 0, 0)
-            Lighting.FogColor = Color3.new(0, 0, 0)
-            Lighting.FogEnd = 100
-        end)
-    end
-end)
-
-----------------------------------------------------------------
--- SIZE 1
-----------------------------------------------------------------
-
-local sizeRemote =
-    ReplicatedStorage:WaitForChild("rEvents"):WaitForChild("changeSpeedSizeRemote")
-
-local function ensureSizeOne()
-    for i = 1, 3 do
-        pcall(function()
-            sizeRemote:InvokeServer("changeSize", 1)
-        end)
-
-        task.wait(0.05)
-    end
-end
-
-----------------------------------------------------------------
--- SIZE 1 ESTÁVEL
-----------------------------------------------------------------
-
-task.spawn(function()
-    while true do
-        pcall(function()
-            sizeRemote:InvokeServer("changeSize", 1)
-        end)
-
-        task.wait(SIZE_CHECK_DELAY)
-    end
-end)
-
-----------------------------------------------------------------
--- AUTO SHAKE
-----------------------------------------------------------------
-
-task.spawn(function()
-    while true do
-        local character = player.Character
-        local tool
-
-        if character then
-            tool = character:FindFirstChild("Tropical Shake")
-        end
-
-        if not tool then
-            tool = player.Backpack:FindFirstChild("Tropical Shake")
-        end
-
-        if tool then
-            pcall(function()
-                muscleEvent:FireServer("tropicalShake", tool)
-            end)
-        end
-
-        task.wait(450)
-    end
-end)
-
-ensureSizeOne()
-
-----------------------------------------------------------------
--- HUD
-----------------------------------------------------------------
-
-local function formatNumber(num)
-    if num >= 1e15 then
-        return string.format("%.2fQ", num / 1e15)
-    elseif num >= 1e12 then
-        return string.format("%.2fT", num / 1e12)
-    elseif num >= 1e9 then
-        return string.format("%.2fB", num / 1e9)
-    elseif num >= 1e6 then
-        return string.format("%.2fM", num / 1e6)
-    elseif num >= 1e3 then
-        return string.format("%.2fK", num / 1e3)
-    end
-
-    return string.format("%.0f", num)
-end
-
-local oldHud = playerGui:FindFirstChild("RebirthHUD")
-
-if oldHud then
-    oldHud:Destroy()
-end
-
-local screenGui = Instance.new("ScreenGui")
-screenGui.Name = "RebirthHUD"
-screenGui.ResetOnSpawn = false
-screenGui.Parent = playerGui
-
-local frame = Instance.new("Frame")
-frame.Size = UDim2.new(0, 420, 0, 130)
-frame.Position = UDim2.new(0, 10, 0, 10)
-frame.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
-frame.BackgroundTransparency = 0.4
-frame.BorderSizePixel = 0
-frame.Parent = screenGui
-
-local corner = Instance.new("UICorner")
-corner.CornerRadius = UDim.new(0, 8)
-corner.Parent = frame
-
-local function makeLabel(text, posY)
-    local label = Instance.new("TextLabel")
-
-    label.Size = UDim2.new(1, -10, 0, 25)
-    label.Position = UDim2.new(0, 5, 0, posY)
-    label.BackgroundTransparency = 1
-    label.TextColor3 = Color3.fromRGB(255, 255, 255)
-    label.TextSize = 15
-    label.Font = Enum.Font.GothamBold
-    label.TextXAlignment = Enum.TextXAlignment.Left
-    label.Text = text
-    label.Parent = frame
-
-    return label
-end
-
-local rebirthsLabel =
-    makeLabel("Rebirths: 0 | Gained: 0", 5)
-
-local timeLabel =
-    makeLabel("0d 0h 0m 0s - Rebirthing", 30)
-
-local paceLabel =
-    makeLabel("Pace: 0 / Hour | 0 / Day | 0 / Week", 55)
-
-local avgPaceLabel =
-    makeLabel("Average Pace: 0 / Hour | 0 / Day | 0 / Week", 80)
-
-timeLabel.TextColor3 = Color3.fromRGB(50, 255, 50)
-
-local initialRebirths = rebirthsStat.Value
-local startTime = tick()
-
-local paceSamples = {}
-local MAX_PACE_SAMPLES = 12
-
-local paceStarted = false
-local lastRebirthTime = nil
-local lastRebirthValue = rebirthsStat.Value
-
-local function projectedPace(gained, elapsed)
-    if elapsed <= 0 or gained <= 0 then
-        return 0, 0, 0
-    end
-
-    local perSecond = gained / elapsed
-
-    return
-        perSecond * 3600,
-        perSecond * 86400,
-        perSecond * 604800
-end
-
-local function updateAveragePace()
-    local totalGained = 0
-    local totalTime = 0
-
-    for _, sample in ipairs(paceSamples) do
-        totalGained += sample.gained
-        totalTime += sample.elapsed
-    end
-
-    if totalTime <= 0 or totalGained <= 0 then
-        return
-    end
-
-    local hour, day, week =
-        projectedPace(totalGained, totalTime)
-
-    avgPaceLabel.Text = string.format(
-        "Average Pace: %s / Hour | %s / Day | %s / Week",
-        formatNumber(hour),
-        formatNumber(day),
-        formatNumber(week)
-    )
-end
-
-rebirthsStat:GetPropertyChangedSignal("Value"):Connect(function()
-    local now = tick()
-    local current = rebirthsStat.Value
-
-    local totalGained =
-        current - initialRebirths
-
-    rebirthsLabel.Text = string.format(
-        "Rebirths: %s | Gained: %s",
-        formatNumber(current),
-        formatNumber(totalGained)
-    )
-
-    if current <= lastRebirthValue then
-        lastRebirthValue = current
-        return
-    end
-
-    if not paceStarted then
-        paceStarted = true
-        lastRebirthTime = now
-        lastRebirthValue = current
-        lastRebirthTick = now
-        return
-    end
-
-    local gainedSinceLast =
-        current - lastRebirthValue
-
-    local elapsedSinceLast =
-        now - lastRebirthTime
-
-    if gainedSinceLast > 0 and elapsedSinceLast > 0 then
-        local hour, day, week =
-            projectedPace(
-                gainedSinceLast,
-                elapsedSinceLast
-            )
-
-        paceLabel.Text = string.format(
-            "Pace: %s / Hour | %s / Day | %s / Week",
-            formatNumber(hour),
-            formatNumber(day),
-            formatNumber(week)
-        )
-
-        table.insert(
-            paceSamples,
-            {
-                gained = gainedSinceLast,
-                elapsed = elapsedSinceLast
-            }
-        )
-
-        while #paceSamples > MAX_PACE_SAMPLES do
-            table.remove(paceSamples, 1)
-        end
-
-        updateAveragePace()
-    end
-
-    lastRebirthTime = now
-    lastRebirthValue = current
-    lastRebirthTick = now
-end)
-
-task.spawn(function()
-    while true do
-        local elapsed = tick() - startTime
-
-        local days =
-            math.floor(elapsed / 86400)
-
-        local hours =
-            math.floor((elapsed % 86400) / 3600)
-
-        local minutes =
-            math.floor((elapsed % 3600) / 60)
-
-        local seconds =
-            math.floor(elapsed % 60)
-
-        timeLabel.Text = string.format(
-            "%dd %dh %dm %ds - Rebirthing",
-            days,
-            hours,
-            minutes,
-            seconds
-        )
-
-        task.wait(1)
-    end
+    local rEvents = ReplicatedStorage:WaitForChild("rEvents")
+    local remote = rEvents:WaitForChild("changeSpeedSizeRemote")
+
+    RunService.RenderStepped:Connect(function()
+        remote:InvokeServer("changeSize", 1)
+    end)
 end)
 
 ----------------------------------------------------------------
@@ -469,16 +79,16 @@ local petCache = {}
 local function rebuildPetCache()
     table.clear(petCache)
 
-    for _, folder in ipairs(player.petsFolder:GetChildren()) do
+    local petsFolder = player:FindFirstChild("petsFolder")
+    if not petsFolder then return end
+
+    for _, folder in ipairs(petsFolder:GetChildren()) do
         if folder:IsA("Folder") then
             for _, pet in ipairs(folder:GetChildren()) do
-                local name = pet.Name
-
-                if not petCache[name] then
-                    petCache[name] = {}
+                if not petCache[pet.Name] then
+                    petCache[pet.Name] = {}
                 end
-
-                table.insert(petCache[name], pet)
+                table.insert(petCache[pet.Name], pet)
             end
         end
     end
@@ -486,487 +96,252 @@ end
 
 rebuildPetCache()
 
-player.petsFolder.DescendantAdded:Connect(function()
-    task.defer(rebuildPetCache)
-end)
-
-player.petsFolder.DescendantRemoving:Connect(function()
-    task.defer(rebuildPetCache)
-end)
-
-local function findPetsByName(name)
-    return petCache[name] or {}
+local petsFolder = player:WaitForChild("petsFolder", 10)
+if petsFolder then
+    petsFolder.DescendantAdded:Connect(rebuildPetCache)
+    petsFolder.DescendantRemoving:Connect(rebuildPetCache)
 end
 
 ----------------------------------------------------------------
--- PETS
+-- EQUIPAR 8 RARE BOSS PET
 ----------------------------------------------------------------
 
-local equipRemote =
-    ReplicatedStorage.rEvents.equipPetEvent
+local function equipRareBossPets()
+    local rEvents = ReplicatedStorage:FindFirstChild("rEvents")
+    if not rEvents then return end
+    local equipRemote = rEvents:FindFirstChild("equipPetEvent")
+    if not equipRemote then return end
 
-local function equipExactPets(name, amount, delayBetween)
-    local pets = findPetsByName(name)
+    rebuildPetCache()
 
-    local equipCount =
-        math.min(amount, #pets)
+    local petName = "Rare Boss Pet"
+    local pets = petCache[petName] or {}
+    local amount = math.min(8, #pets)
 
-    if equipCount < amount then
-        warn(string.format(
-            "[MMB] %s: precisava de %d, encontrou %d.",
-            name,
-            amount,
-            equipCount
-        ))
-    end
-
-    for i = 1, equipCount do
-        pcall(function()
-            equipRemote:FireServer(
-                "equipPet",
-                pets[i]
-            )
-        end)
-
-        if delayBetween and delayBetween > 0 then
-            task.wait(delayBetween)
-        end
-    end
-
-    return equipCount
-end
-
-----------------------------------------------------------------
--- LOADOUT REP
-----------------------------------------------------------------
-
-local function equipRepLoadout()
-    local tribals =
-        findPetsByName("Tribal Overlord")
-
-    -- Remove os Tribal Overlord.
-    for i = 1, math.min(3, #tribals) do
-        pcall(function()
-            equipRemote:FireServer(
-                "unequipPet",
-                tribals[i]
-            )
-        end)
-    end
-
-    -- Sem espera entre unequip/equip.
-    if PET_SWITCH_DELAY > 0 then
-        task.wait(PET_SWITCH_DELAY)
-    end
-
-    -- Equipa Swift Samurai.
-    equipExactPets(
-        "Swift Samurai",
-        3,
-        PET_DELAY
-    )
-
-    -- Equipa Rare Boss Pet.
-    equipExactPets(
-        "Rare Boss Pet",
-        5,
-        PET_DELAY
-    )
-
-    if PET_SWITCH_DELAY > 0 then
-        task.wait(PET_SWITCH_DELAY)
+    for i = 1, amount do
+        equipRemote:FireServer("equipPet", pets[i])
     end
 end
 
 ----------------------------------------------------------------
--- LOADOUT REBIRTH
+-- FARM DE REP (FREQUÊNCIA MÁXIMA ZERO DELAY)
 ----------------------------------------------------------------
 
-local function equipRebirthLoadout()
-    local swifts =
-        findPetsByName("Swift Samurai")
+local farmConnection
 
-    local bosses =
-        findPetsByName("Rare Boss Pet")
+local function startStrengthFarm()
+    isFarming = true
 
-    -- Remove Swift Samurai.
-    for i = 1, math.min(3, #swifts) do
-        pcall(function()
-            equipRemote:FireServer(
-                "unequipPet",
-                swifts[i]
-            )
-        end)
+    if farmConnection then
+        farmConnection:Disconnect()
     end
 
-    -- Remove Rare Boss Pet.
-    for i = 1, math.min(5, #bosses) do
-        pcall(function()
-            equipRemote:FireServer(
-                "unequipPet",
-                bosses[i]
-            )
-        end)
-    end
-
-    if PET_SWITCH_DELAY > 0 then
-        task.wait(PET_SWITCH_DELAY)
-    end
-
-    -- Equipa Tribal Overlord.
-    equipExactPets(
-        "Tribal Overlord",
-        3,
-        PET_DELAY
-    )
-
-    if PET_SWITCH_DELAY > 0 then
-        task.wait(PET_SWITCH_DELAY)
-    end
-end
-
-----------------------------------------------------------------
--- FARM DE FORÇA
-----------------------------------------------------------------
-
-local function farmStrength(target)
-    while isRunning and strengthStat.Value < target do
-
-        for i = 1, REP_BATCH do
-            if not isRunning or strengthStat.Value >= target then
-                break
-            end
-
-            pcall(function()
-                muscleEvent:FireServer("rep")
-            end)
-        end
-
-        if REP_DELAY > 0 then
-            task.wait(REP_DELAY)
-        else
-            task.wait()
-        end
-    end
-end
-
-----------------------------------------------------------------
--- REBIRTH ULTRA RÁPIDO
-----------------------------------------------------------------
-
-local function doRebirth()
-    local rebirths =
-        rebirthsStat.Value
-
-    local strengthTarget =
-        5000 + (rebirths * 2550)
-
-    ------------------------------------------------------------
-    -- FARM
-    ------------------------------------------------------------
-
-    farmStrength(strengthTarget)
-
-    if not isRunning then
-        return
-    end
-
-    if strengthStat.Value < strengthTarget then
-        return
-    end
-
-    ------------------------------------------------------------
-    -- TROCA PARA TRIBAL
-    ------------------------------------------------------------
-
-    equipRebirthLoadout()
-
-    ------------------------------------------------------------
-    -- REBIRTH
-    ------------------------------------------------------------
-
-    local before =
-        rebirthsStat.Value
-
-    local attempts = 0
-
-    repeat
-        attempts += 1
-
-        pcall(function()
-            ReplicatedStorage.rEvents.rebirthRemote:
-                InvokeServer("rebirthRequest")
-        end)
-
-        -- Somente cede o frame se não houver delay configurado.
-        if REBIRTH_DELAY > 0 then
-            task.wait(REBIRTH_DELAY)
-        else
-            task.wait()
-        end
-
-        -- Proteção contra servidor sem resposta.
-        if attempts >= 100 then
-            warn("[MMB] Rebirth não confirmou após 100 tentativas.")
-            break
-        end
-
-    until rebirthsStat.Value > before
-        or not isRunning
-
-    if rebirthsStat.Value > before then
-        lastRebirthTick = tick()
-    end
-end
-
-----------------------------------------------------------------
--- LOOP PRINCIPAL
-----------------------------------------------------------------
-
-local function startRebirthLoop()
-    if rebirthThread then
-        task.cancel(rebirthThread)
-        rebirthThread = nil
-    end
-
-    isRunning = true
-
-    rebirthThread = task.spawn(function()
-        while isRunning do
-
-            ----------------------------------------------------
-            -- LOADOUT DE FARM
-            ----------------------------------------------------
-
-            equipRepLoadout()
-
-            ----------------------------------------------------
-            -- FARM + REBIRTH
-            ----------------------------------------------------
-
-            doRebirth()
-
-            -- Não adiciona delay artificial.
-            task.wait()
+    -- RenderStepped roda antes do quadro ser desenhado na tela
+    -- O loop 'for' dispara múltiplos eventos por fraçao infinitesimal de segundo
+    farmConnection = RunService.RenderStepped:Connect(function()
+        if not isFarming or not muscleEvent then return end
+        
+        for i = 1, REPS_PER_FRAME do
+            muscleEvent:FireServer("rep")
         end
     end)
 end
 
-----------------------------------------------------------------
--- LOCK POSITION
-----------------------------------------------------------------
-
-local function startPositionLock()
-    lockEnabled = true
-
-    task.spawn(function()
-        local c =
-            player.Character
-            or player.CharacterAdded:Wait()
-
-        local h =
-            c:WaitForChild("HumanoidRootPart")
-
-        local lockPos =
-            h.Position
-
-        while lockEnabled do
-            if h.Parent then
-                h.Velocity =
-                    Vector3.new(0, 0, 0)
-
-                h.RotVelocity =
-                    Vector3.new(0, 0, 0)
-
-                h.CFrame =
-                    CFrame.new(lockPos)
-            end
-
-            task.wait(0.1)
-        end
-    end)
+local function stopStrengthFarm()
+    isFarming = false
+    if farmConnection then
+        farmConnection:Disconnect()
+        farmConnection = nil
+    end
 end
 
 ----------------------------------------------------------------
--- INITIALIZE
+-- HUD
+----------------------------------------------------------------
+
+local function formatNumber(num)
+    if num >= 1e15 then return string.format("%.2fQ", num / 1e15)
+    elseif num >= 1e12 then return string.format("%.2fT", num / 1e12)
+    elseif num >= 1e9 then return string.format("%.2fB", num / 1e9)
+    elseif num >= 1e6 then return string.format("%.2fM", num / 1e6)
+    elseif num >= 1e3 then return string.format("%.2fK", num / 1e3)
+    end
+    return string.format("%.0f", num)
+end
+
+local PINK = Color3.fromRGB(255, 45, 150)
+local LIGHT_PINK = Color3.fromRGB(255, 125, 195)
+local DARK = Color3.fromRGB(12, 8, 14)
+local WHITE = Color3.fromRGB(255, 255, 255)
+
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "RebirthHUD"
+screenGui.ResetOnSpawn = false
+screenGui.IgnoreGuiInset = true
+screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+screenGui.Parent = playerGui
+
+local frame = Instance.new("Frame")
+frame.Name = "DZM_HUD"
+frame.Size = UDim2.new(0, 430, 0, 300)
+frame.AnchorPoint = Vector2.new(0.5, 1)
+frame.Position = UDim2.new(0.5, 0, 1, -42)
+frame.BackgroundColor3 = DARK
+frame.BackgroundTransparency = 0.06
+frame.BorderSizePixel = 0
+frame.Parent = screenGui
+
+local corner = Instance.new("UICorner")
+corner.CornerRadius = UDim.new(0, 16)
+corner.Parent = frame
+
+local stroke = Instance.new("UIStroke")
+stroke.Color = PINK
+stroke.Thickness = 2
+stroke.Parent = frame
+
+local title = Instance.new("TextLabel")
+title.Size = UDim2.new(1, -30, 0, 35)
+title.Position = UDim2.new(0, 17, 0, 10)
+title.BackgroundTransparency = 1
+title.Text = "⚡ REP FARM"
+title.TextColor3 = WHITE
+title.TextSize = 23
+title.Font = Enum.Font.GothamBlack
+title.TextXAlignment = Enum.TextXAlignment.Left
+title.Parent = frame
+
+local status = Instance.new("TextLabel")
+status.Size = UDim2.new(1, -34, 0, 25)
+status.Position = UDim2.new(0, 17, 0, 52)
+status.BackgroundTransparency = 1
+status.Text = "🟢 FARMANDO REP (INFINITE SPEED)"
+status.TextColor3 = PINK
+status.TextSize = 15
+status.Font = Enum.Font.GothamBold
+status.TextXAlignment = Enum.TextXAlignment.Left
+status.Parent = frame
+
+local strengthLabel = Instance.new("TextLabel")
+strengthLabel.Size = UDim2.new(1, -34, 0, 50)
+strengthLabel.Position = UDim2.new(0, 17, 0, 87)
+strengthLabel.BackgroundTransparency = 1
+strengthLabel.Text = "FORÇA: 0"
+strengthLabel.TextColor3 = WHITE
+strengthLabel.TextSize = 25
+strengthLabel.Font = Enum.Font.GothamBlack
+strengthLabel.TextXAlignment = Enum.TextXAlignment.Left
+strengthLabel.Parent = frame
+
+local petsLabel = Instance.new("TextLabel")
+petsLabel.Size = UDim2.new(1, -34, 0, 30)
+petsLabel.Position = UDim2.new(0, 17, 0, 145)
+petsLabel.BackgroundTransparency = 1
+petsLabel.Text = "🐲 PETS: 8 RARE BOSS PET"
+petsLabel.TextColor3 = LIGHT_PINK
+petsLabel.TextSize = 16
+petsLabel.Font = Enum.Font.GothamBold
+petsLabel.TextXAlignment = Enum.TextXAlignment.Left
+petsLabel.Parent = frame
+
+local sessionLabel = Instance.new("TextLabel")
+sessionLabel.Size = UDim2.new(1, -34, 0, 30)
+sessionLabel.Position = UDim2.new(0, 17, 0, 180)
+sessionLabel.BackgroundTransparency = 1
+sessionLabel.Text = "🕐 Sessão: 00:00:00"
+sessionLabel.TextColor3 = WHITE
+sessionLabel.TextSize = 15
+sessionLabel.Font = Enum.Font.GothamBold
+sessionLabel.TextXAlignment = Enum.TextXAlignment.Left
+sessionLabel.Parent = frame
+
+local watermark = Instance.new("TextLabel")
+watermark.Size = UDim2.new(0, 430, 0, 25)
+watermark.AnchorPoint = Vector2.new(0.5, 1)
+watermark.Position = UDim2.new(0.5, 0, 1, -5)
+watermark.BackgroundTransparency = 1
+watermark.Text = "💧 CREATOR <<DZM>>"
+watermark.TextColor3 = PINK
+watermark.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
+watermark.TextStrokeTransparency = 0.15
+watermark.TextSize = 17
+watermark.Font = Enum.Font.GothamBlack
+watermark.Parent = screenGui
+
+----------------------------------------------------------------
+-- ARRASTAR HUD
+----------------------------------------------------------------
+
+local dragging = false
+local dragStart
+local startPos
+
+title.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        dragging = true
+        dragStart = input.Position
+        startPos = frame.Position
+    end
+end)
+
+title.InputEnded:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        dragging = false
+    end
+end)
+
+UserInputService.InputChanged:Connect(function(input)
+    if not dragging then return end
+    if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+        local delta = input.Position - dragStart
+        frame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+        watermark.Position = UDim2.new(frame.Position.X.Scale, frame.Position.X.Offset, 1, -5)
+    end
+end)
+
+----------------------------------------------------------------
+-- ATUALIZAR HUD
+----------------------------------------------------------------
+
+local startTime = tick()
+
+task.spawn(function()
+    while true do
+        if strengthStat then
+            strengthLabel.Text = "FORÇA: " .. formatNumber(strengthStat.Value)
+        end
+
+        local totalSeconds = math.floor(tick() - startTime)
+        local hours = math.floor(totalSeconds / 3600)
+        local minutes = math.floor((totalSeconds % 3600) / 60)
+        local seconds = totalSeconds % 60
+
+        sessionLabel.Text = string.format("🕐 Sessão: %02d:%02d:%02d", hours, minutes, seconds)
+        task.wait(0.1)
+    end
+end)
+
+----------------------------------------------------------------
+-- INICIALIZAÇÃO
 ----------------------------------------------------------------
 
 local function initialize()
-    if initializing then
-        return
-    end
-
-    initializing = true
-    isRunning = false
-    lockEnabled = false
-
-    if rebirthThread then
-        task.cancel(rebirthThread)
-        rebirthThread = nil
-    end
-
-    local char =
-        player.Character
-        or player.CharacterAdded:Wait()
-
-    local humanoid =
-        char:WaitForChild("Humanoid")
-
-    if humanoid.Health <= 0 then
-        char = player.CharacterAdded:Wait()
-        task.wait(1)
-    end
-
-    task.wait(0.5)
-
-    ------------------------------------------------------------
-    -- SIZE
-    ------------------------------------------------------------
-
-    ensureSizeOne()
-
-    ------------------------------------------------------------
-    -- ANTI-LAG
-    ------------------------------------------------------------
-
-    applyAntiLag()
-
-    ------------------------------------------------------------
-    -- FORÇA INICIAL
-    ------------------------------------------------------------
-
-    if strengthStat.Value < 1000000 then
-        local weightTool =
-            player.Character:FindFirstChild("Weight")
-            or player.Backpack:FindFirstChild("Weight")
-
-        if weightTool then
-            local currentCharacter =
-                player.Character
-
-            local currentHumanoid =
-                currentCharacter:FindFirstChildOfClass("Humanoid")
-
-            if currentHumanoid then
-                currentHumanoid:EquipTool(weightTool)
-
-                task.wait(0.2)
-
-                while strengthStat.Value < 1000000 do
-
-                    pcall(function()
-                        muscleEvent:FireServer("rep")
-                    end)
-
-                    if REP_DELAY > 0 then
-                        task.wait(REP_DELAY)
-                    else
-                        task.wait()
-                    end
-                end
-
-                currentHumanoid:UnequipTools()
-
-                task.wait(0.2)
-            end
-        end
-
-        ensureSizeOne()
-    end
-
-    ------------------------------------------------------------
-    -- INDUSTRIAL SQUAT
-    ------------------------------------------------------------
-
-    char =
-        player.Character
-        or player.CharacterAdded:Wait()
-
-    local hrp =
-        char:WaitForChild("HumanoidRootPart")
-
-    hrp.CFrame = CFrame.new(
-        -5218.76,
-        56.42,
-        5418.26
-    )
-
-    task.wait(0.7)
-
-    ------------------------------------------------------------
-    -- E
-    ------------------------------------------------------------
-
-    for i = 1, 10 do
-        VirtualInputManager:SendKeyEvent(
-            true,
-            Enum.KeyCode.E,
-            false,
-            game
-        )
-
-        task.wait(0.05)
-
-        VirtualInputManager:SendKeyEvent(
-            false,
-            Enum.KeyCode.E,
-            false,
-            game
-        )
-
-        task.wait(0.05)
-    end
-
-    task.wait(1)
-
-    ------------------------------------------------------------
-    -- LOCK
-    ------------------------------------------------------------
-
-    startPositionLock()
-
-    ------------------------------------------------------------
-    -- START
-    ------------------------------------------------------------
-
-    lastRebirthTick = tick()
-    initializing = false
-
-    startRebirthLoop()
+    stopStrengthFarm()
+    equipRareBossPets()
+    startStrengthFarm()
 end
 
 ----------------------------------------------------------------
--- MORTE
+-- REINICIAR APÓS MORRER
 ----------------------------------------------------------------
 
 player.CharacterAdded:Connect(function()
-    task.wait(1.5)
-
+    stopStrengthFarm()
     initialize()
 end)
 
 ----------------------------------------------------------------
--- WATCHDOG
-----------------------------------------------------------------
-
-task.spawn(function()
-    while true do
-        task.wait(30)
-
-        local elapsed =
-            tick() - lastRebirthTick
-
-        if elapsed > REBIRTH_TIMEOUT then
-            warn(string.format(
-                "[MMB] ALERTA: nenhum rebirth há %.0f segundos.",
-                elapsed
-            ))
-        end
-    end
-end)
-
-----------------------------------------------------------------
--- INICIA
+-- INICIAR
 ----------------------------------------------------------------
 
 initialize()
